@@ -1,0 +1,355 @@
+---
+title: "Netflix Project"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(ggfortify)
+```
+
+```{r}
+netflixData <- read_csv("https://raw.githubusercontent.com/reisanar/datasets/master/netflixShows.csv")
+```
+
+View the first six entries of data:
+
+```{r}
+head(netflixData)
+```
+
+```{r}
+netflixDataClean <- netflixData %>%
+  #rename variables to be camel case so that they are more easily usable
+  rename(releaseYear = "release year", userRatingScore = "user rating score", userRatingSize = "user rating size") %>%
+  #omit NA values from the data
+  na.omit(netflixData)
+```
+
+View the cleaned dataset
+
+```{r}
+netflixDataClean
+```
+
+We can see that we now only have 574 of the previous 100 rows.
+
+Display the distribution of the different age ratings of programs on Netflix.
+
+```{r}
+netflixDataClean %>%
+  ggplot +
+  geom_bar(aes(x = rating)) +
+  labs(title = "Total Ratings", x = "MPAA Rating", y = "Total Films in Rating")
+  
+```
+
+```{r}
+netflixDataClean %>%
+  ggplot +
+  geom_bar(aes(x = userRatingScore)) +
+  labs(title = "Total Films per User Ratings", x = "User Ratings", y = "Total Films in Rating")
+```
+
+We derive the average rating of the userRatingScore
+
+```{r}
+avgScore = mean(netflixDataClean$userRatingScore)
+```
+
+Next it makes sense to associate the different ratings with their own average scores, and in order to do this, we will make separate dataframes including the different ratings
+
+First is programs that fall into the PG category, this includes TV-PG and PG, this groups both movie and TV PG in the same category
+
+```{r}
+netflixPG <- netflixDataClean %>% 
+  filter(rating %in% c('PG','TV-PG'))
+```
+
+Followed by the grouping of adult only content, this includes R, TV-MA, and NR (Not Rated, which is generally given to movies with content that surpasses that of an R-rating)
+
+```{r}
+netflixAdult <- netflixDataClean %>%
+  filter(rating %in% c('R', 'TV-MA', 'NR'))
+```
+
+Teenage content of PG-13 and TV-14
+
+```{r}
+netflixTeen <- netflixDataClean %>%
+  filter(rating %in% c('PG-13','TV-14'))
+```
+
+Y7 content of TV-Y7 and TV-Y7-FV
+
+```{r}
+netflixY7 <- netflixDataClean %>%
+  filter(rating %in% c('TV-Y7', 'TV-Y7-FV'))
+```
+
+G content of TV-G and G
+
+```{r}
+netflixG <- netflixDataClean %>%
+  filter(rating %in% c('TV-G', 'G'))
+```
+
+and finally, TV-Y content
+
+```{r}
+netflixY <- netflixDataClean %>%
+  filter(rating == 'TV-Y')
+```
+
+To verify that all data entries are accounted for we will add the amounts of observations in these new dataframes in hopes that they equal up to 574, which is the total observations in the clean dataset.
+```{r}
+nrow(netflixAdult) + nrow(netflixG) + nrow(netflixPG) + nrow(netflixTeen) + nrow(netflixY) + nrow(netflixY7)
+```
+
+and it does!
+
+Now, it would aide us in viewing if there is a coordination between user rating and a program's rating by placing the data in a bar chart
+
+To do this we created a new data frame with the mean values for the newly made data frames
+
+```{r}
+netflixAverages <- data.frame(Rating = c("Adult", "G", "PG", "Teen", "Y", "Y7"), 
+            ratingAvg = c(mean(netflixAdult$userRatingScore), mean(netflixG$userRatingScore), mean(netflixPG$userRatingScore), mean(netflixTeen$userRatingScore), mean(netflixY$userRatingScore), mean(netflixY7$userRatingScore)))
+```
+
+Then plug this data frame into a bar chart so we can view which program ratings may be more likely correlated with higher user scores
+
+```{r}
+netflixAverages %>%
+  ggplot +
+  geom_bar(aes(x = Rating, y = ratingAvg, fill = (ratingAvg >= mean(netflixDataClean$userRatingScore))), stat = "identity") +
+  labs(y = "Rating's Average", fill = "Greater Than Global Average (84.04)") +
+  geom_hline(yintercept=mean(netflixDataClean$userRatingScore), linetype="dashed")
+```
+
+
+
+
+
+______________________________
+
+Now I will perform sentiment analysis to see if there is any correlation between the sentiments found in the titles of films and see if there is a correlation between negative/positive sentiments and a higher score or different types of ratings. I would predict from the data above that adult rated films will have more negative sentiments associated with them and that because adult movies generally have higher user ratings, that negative sentiment will lead to higher scores rather than lower ones. 
+
+I will be using the 'afinn' sentiment database because I believe that it is the best for quantifying a whole title.
+
+```{r}
+# sample of sentiments
+get_sentiments("afinn") %>% sample_n(10)
+```
+
+Unnest tokens on the titles and place them into a new colum called words, this will allow for the easier separation of the words and stopwords in the following chunk of code.
+
+```{r}
+netflixDataClean %>%
+  unnest_tokens(word, title)
+```
+
+```{r}
+netflixUnnested <- netflixDataClean %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+"))
+netflixUnnested
+```
+
+We can see that this has removed 476 stop-words, which admittedly makes sense due to the amount of uninfluential words that generally go into composing a title, in the previous chunk of code we stored these data into a dataframe named 'netflixUnnested'.
+
+In the creation of 'netflixUnnested' a new column was created 'title2', this is created so that the unnesting of tokens takes place on the 'title2' column so that the 'title' column remains in the data frame.
+
+Next we must join the tokens together in order to find the overall sentiment of the titles in each of the categories we previously constructed based on ratings
+
+
+```{r}
+netflixAFINN <- netflixUnnested %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+netflixAFINN
+```
+
+This data reveals a lot to us, first of all, the afinn sentiment analysis has far less words than one might expect, only 2477 according to the afinn text file I downloaded. Additionally, most titles do not include afinn judged words, and also there are a lot of different listings of the same shows in netflix's catalogue.
+
+So, while this may not be a worthwhile way to display the data, it is at least a worthwhile display of our prowess over sentiment analysis that we acquired via this course. 
+
+```{r}
+netflixAdultSentiment <- netflixAdult %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixGSentiment <- netflixG %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixPGSentiment <- netflixPG %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixTeenSentiment <- netflixTeen %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixYSentiment <- netflixY %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixY7Sentiment <- netflixY7 %>%
+  mutate(title2 = title) %>%
+  unnest_tokens(word, title2) %>%
+  filter(!word %in% stop_words$word, 
+         str_detect(word, "[a-z]+")) %>% 
+  group_by(title) %>% 
+  inner_join(get_sentiments("afinn"))
+```
+
+```{r}
+netflixSentimentAverages <- data.frame(Rating = c("Adult", "G", "PG", "Teen", "Y", "Y7"), 
+            sentimentAvg = c(mean(netflixAdultSentiment$value), mean(netflixGSentiment$value), mean(netflixPGSentiment$value), mean(netflixTeenSentiment$value), mean(netflixYSentiment$value), mean(netflixY7Sentiment$value)))
+```
+
+With this newly created dataframe we can see what the average sentiment value for all of the applicable words in titles based on their rating
+```{r}
+mean(netflixAFINN$value)
+```
+
+
+
+```{r}
+netflixSentimentAverages %>%
+  ggplot +
+  geom_bar(aes(x = Rating, y = sentimentAvg, fill = (sentimentAvg >= mean(netflixAFINN$value))), stat = "identity") +
+  labs(y = "Sentiments of Title's Average", fill = "Greater Than Global Average (-0.89)") +
+  geom_hline(yintercept=mean(netflixAFINN$value), linetype="dashed")
+```
+
+This graph displays that my prediction reflecting that the more adult/teen oriented ratings would have more negative afinn ratings on average. Both Adult and Teen average sentiments fell below that of the average, PG (The only other rating not directly aimed at children) was the only other rating with a negative sentiment despite the fact that it was greater than the average. 
+
+From here I want to test if there is a correlation between user rating and sentiment score
+
+```{r}
+netflixSentiment5060 <- netflixAFINN %>%
+  filter(userRatingScore > 50, userRatingScore < 60)
+```
+
+```{r}
+netflixSentiment6070 <-netflixAFINN %>%
+  filter
+```
+
+
+For this I will create a scatterplot to view if there is a discernable correlation between the user rating score and the Sentiment Value, I have created a chart with title names and without to enhance viewing
+
+```{r}
+ggplot(netflixAFINN, aes(x=value, y=userRatingScore)) + geom_point() + geom_smooth(method=lm, se=FALSE) +
+  labs(x = "Sentiment Values", y = "User Rating Scores", title = "Sentiment vs User Ratings")
+```
+
+```{r}
+ggplot(netflixAFINN, aes(x=value, y=userRatingScore)) + geom_point() + geom_text(label = netflixAFINN$title) + geom_smooth(method=lm, se=FALSE) +
+  labs(x = "Sentiment Values", y = "User Rating Scores", title = "Sentiment vs User Ratings")
+```
+
+We can see here that there is a fairly discernable negative linear correlation between positive sentiment and user rating.
+
+
+___________________________________
+
+
+
+
+```{r}
+netflix_small <- netflixDataClean %>% 
+                  select(releaseYear, userRatingScore)
+```
+
+
+```{r}
+# compute PCs on two dimensions
+pcs <- prcomp(netflix_small)
+summary(pcs)
+```
+
+68% of the total variance is accounted for by component 1
+
+
+```{r}
+# the matrix of variable loadings
+pcs$rotation
+```
+
+
+```{r}
+# the values of the transformed variables
+head(pcs$x)
+```
+
+
+
+```{r}
+# creates the covariance matrix of release year and user rating score
+var(netflix_small)
+```
+
+
+
+```{r}
+netflix_all <- netflixDataClean %>% 
+                  select(releaseYear, userRatingScore, ratingDescription,userRatingSize)
+```
+
+
+
+```{r}
+pca_netflix_ <- prcomp(netflix_all)
+summary(netflix_all)
+```
+
+
+```{r}
+autoplot(pca_netflix_, loadings.colour = 'blue',
+         loadings = TRUE, loadings.label = TRUE,
+         loadings.label.size = 3)
+```
+
+
+
+```{r}
+autoplot(cor(netflix_all)) + 
+  labs(x = "", y = "", title = "Correlation Plot") 
+```
+

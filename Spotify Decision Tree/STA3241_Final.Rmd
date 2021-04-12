@@ -1,0 +1,322 @@
+---
+title: "STA3241_FINAL_PROJECT"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+## Packages
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(caret)
+library(rpart.plot)
+library(formattable)
+library(corrplot)
+library(randomForest)
+```
+I've chosen these packages in order to organize and be able to graph may data efficiently.
+
+
+## Research Question
+
+I will be using the all_grammy dataset.I will executing decision trees and random forest to explore the correlation between categories of music in the grammy dataset. My questions are _is it possible to classify grammy winning songs into categories with just audio features and is what can these audio features tell us about the distinctions between categories._
+
+## Preparing the Data
+
+```{r}
+glimpse(all_grammy)
+```
+
+
+As we can see here there are a lot of observation in this dataset. We are going to be looking at the category section along with all the feature of the songs from danceablity to tempo.
+
+```{r}
+all_grammy %>% 
+  count(category) %>%
+  knitr::kable()
+```
+
+If we look through this data we will find that in the category section "albumoftheyear" is a duplication of the rest of the categories. So, in this case I will be removing it from the dataset.
+
+
+```{r}
+grammy <- all_grammy[-c(1 :587),]
+
+grammy
+```
+
+```{r}
+grammy <- grammy %>%
+  mutate(key = as.numeric(key), mode = as.numeric(mode), time_signature = as.numeric(time_signature),key_mode = as.numeric(key_mode),danceability = as.numeric(danceability),energy = as.numeric(energy),loudness = as.numeric(loudness),speechiness = as.numeric(speechiness),acousticness = as.numeric(acousticness),instrumentalness = as.numeric(instrumentalness),liveness = as.numeric(liveness),valence = as.numeric(valence),tempo = as.numeric(tempo))
+```
+
+
+
+That's better, now we continue with the set up more of the data.
+
+```{r}
+grammy %>% 
+  count(category) %>%
+  knitr::kable()
+```
+
+
+
+
+
+## Looking at the audio features
+
+Next will take a look at what is the distribution of the audio features is in the dataset.
+
+
+```{r}
+feature_names <- names(grammy)[4:14]
+
+grammy %>%
+  select(c('category', feature_names)) %>%
+  pivot_longer(cols = feature_names) %>%
+  ggplot(aes(x = value)) +
+  geom_density(aes(color = category), alpha = 3) +
+  facet_wrap(~name, ncol = 3, scales = 'free') +
+  labs(title = 'Spotify Audio Feature Density - by Category',
+       x = '', y = 'density')
+```
+
+With this we are suppose to see various scales of audio feature separated by their respected categories.
+
+
+## Outliers
+
+Here we are looking at the duration of the songs and seeing the extent of each of them.
+
+```{r}
+with_outliers <- grammy %>%
+  ggplot(aes(y = duration_ms)) +
+  geom_boxplot(color = "red", coef = 4) +
+  coord_flip() +
+  labs(title = 'Duration') 
+
+duration_outliers <- boxplot(grammy$duration_ms, 
+                             plot = FALSE, range = 4)$out
+
+grammy_no_outliers <- grammy %>%
+  filter(!duration_ms %in% duration_outliers) 
+
+without_outliers <- grammy_no_outliers %>%
+  ggplot(aes(y = duration_ms)) +
+  geom_boxplot(color = "red", coef = 4) +
+  coord_flip() +
+  labs(title = 'Duration, outliers removed') 
+
+print(with_outliers)
+print(without_outliers)
+```
+
+The average song is about 3 and a half minutes for a grammy winning song.
+
+
+## Correlation between feature
+
+We will be using a correlation matrix to test if there are any redundancies in the features.
+
+```{r}
+grammy_no_outliers %>%
+  select(feature_names) %>%
+  scale() %>%
+  cor()
+```
+
+
+```{r}
+grammy_no_outliers %>%
+  select(feature_names) %>%
+  scale() %>%
+  cor() %>% 
+corrplot::corrplot(method = 'color', 
+                     order = 'hclust', 
+                     type = 'upper', 
+                     diag = FALSE, 
+                     tl.col = 'black',
+                     addCoef.col = "grey30",
+                     number.cex = 0.6,
+                     main = 'Audio Feature Correlation',
+                     mar = c(2,2,2,2),
+                     family = 'Avenir')
+```
+
+From these correlation matrices we can see that the loudness and energy with 0.75 have the most positive correlation, while energy and acousticness have the most negative with -0.68.
+
+## Correlation between Categories
+
+
+Using the information above we are going to correlate each category to each and see what makes them similar.
+
+```{r}
+avg_category_matrix <- grammy_no_outliers %>%
+  group_by(category) %>%
+  summarise_if(is.numeric, median, na.rm = TRUE) %>%
+  ungroup() 
+
+avg_category_cor <- avg_category_matrix %>%
+  select(feature_names, -mode,) %>% 
+  scale() %>%
+  t() %>%
+  as.matrix() %>%
+  cor() 
+
+colnames(avg_category_cor) <- avg_category_matrix$category
+row.names(avg_category_cor) <- avg_category_matrix$category
+
+avg_category_cor
+```
+
+From this we can see that the most negative correlation comes from Female Pop and Electric/Dance with -0.73. The most positive correlation comes from Rock and Electronic/Dance with 0.21.
+
+
+## Classifying a song to a a category with audio feature
+
+To do this I will be using the methods learned in class. _Decision Trees and Random Forest_
+
+To prepare the data for training we'll scale the numeric features, and then split into a training set (80% of the songs) and a test set (20%).
+
+```{r}
+grammy_scaled <- grammy_no_outliers %>%
+  mutate_if(is.numeric, scale)
+
+set.seed(1234)
+training_songs <- sample(1:nrow(grammy_scaled), nrow(grammy_scaled)*.80, replace = FALSE)
+train_set <- grammy_scaled[training_songs, c('category', feature_names)] 
+test_set <- grammy_scaled[-training_songs, c('category', feature_names)] 
+
+train_resp <- grammy_scaled[training_songs, 'category']
+test_resp <- grammy_scaled[-training_songs, 'category']
+```
+
+
+## Modeling
+
+# Decision Tree
+
+Decision trees are a simple classification tool that have an output that reads like a flow chart, where each node represents a feature, each branch an outcome of a decision on that feature, and the leaves represent the class of the final decision. The algorithm works by partitioning the data into sub-spaces repeatedly in order to create the most homogeneous groups possible. The rules generated by the algorithm are visualized in the tree.
+
+The biggest benefit of decision trees is in interpretability - the resulting tree provides a lot of information about feature importance. They are also non-parametric and make no assumptions about the data. However, they are prone to overfitting and may produce high variance between models created from different samples of the same data.
+
+
+```{r}
+set.seed(1111)
+model_dt <- rpart(category ~ ., data = train_set)
+
+rpart.plot(model_dt,
+           type = 5, 
+           extra = 104,
+           leaf.round = 0,
+           fallen.leaves = FALSE, 
+           branch = 0.3, 
+           under = TRUE,
+           under.col = 'grey40',
+           family = 'Avenir',
+           main = 'Category Decision Tree',
+           tweak = 1.2)
+```
+
+From the looks of the decision tree: Rock and Alternative is best predicted by speechiness, along with Electronic/Dance being predicted by the danceablity.The values under the leaves represent the distribution of true values for each class grouped into that leaf.
+
+
+```{r}
+predict_dt <- predict(object = model_dt, newdata = test_set)
+max_id <- apply(predict_dt, 1, which.max)
+pred <- levels(as.factor(test_set$category))[max_id]
+
+compare_dt <- data.frame(true_value = test_set$category,
+                         predicted_value = pred,
+                         model = 'decision_tree',
+                         stringsAsFactors = FALSE)
+
+model_accuracy_calc <- function(df, model_name) {
+  df %>% 
+    mutate(match = ifelse(true_value == predicted_value, TRUE, FALSE)) %>% 
+    count(match) %>% 
+    mutate(accuracy = n/sum(n),
+           model = model_name)
+}
+
+accuracy_dt <- model_accuracy_calc(df = compare_dt, model_name = 'decision_tree')
+accuracy_dt
+```
+
+The decision tree model shows an overall accuracy, or percentage of songs classified into their correct category, of 57.3%.
+
+
+# Random Forest
+
+Random forests are an ensemble of decision trees, aggregating classifications made by multiple decision trees of different depths. This is also known as bootstrap aggregating (or bagging), and helps avoid overfitting and improves prediction accuracy.
+
+I'll run 1 random forest will 100 trees and test its accuracy.
+
+```{r}
+model_rf <- randomForest(as.factor(category) ~ ., ntree = 100, importance = TRUE, data = train_set)
+
+predict_rf <- predict(model_rf, test_set)
+
+compare_rf <- data.frame(true_value = test_resp$category,
+                         predicted_value = predict_rf,
+                         model = 'random_forest',
+                         stringsAsFactors = FALSE) 
+
+accuracy_rf <- model_accuracy_calc(df = compare_rf, model_name = 'random_forest')
+accuracy_rf
+```
+
+The random forest model shows overall accuracy of 62%.
+
+# Comparison
+
+I want to see how well these 2 methods compare to each other.
+
+```{r}
+accuracy_rf %>%
+  rbind(accuracy_dt) %>%
+  filter(match == TRUE) %>%
+  select(model, accuracy) %>%
+  mutate(accuracy = percent(accuracy,2)) %>%
+  knitr::kable()
+```
+
+If we guessed randomly which category to assign to each song in this dataset, the accuracy would be 16.6% (or 1 in 6). The decision tree improved on random chance twofold, and random forest improved it more than threefold, though none would be very reliable in practice.
+
+I would also like to see if we can use these model to predict the category of the songs in the dataset.
+
+```{r}
+compare_dt %>%
+  rbind(compare_rf) %>%
+  count(true_value, predicted_value, model) %>%
+  mutate(match = ifelse(true_value == predicted_value, TRUE, FALSE)) %>%
+  group_by(true_value, model) %>%
+  mutate(pct = n/sum(n)) %>% 
+  ungroup() %>%
+  mutate(label = ifelse(match == TRUE, 
+                        paste0(round(pct * 100,1),'%'), 
+                        "")) %>%
+  ggplot(aes(x = true_value, 
+             y = pct, 
+             fill = predicted_value, 
+             label = label)) +
+  geom_col(position = 'dodge') +
+  geom_text(position = position_dodge(width = 1), 
+            cex = 2.75, 
+            hjust = -0.1) +
+  facet_wrap( ~ model, ncol = 3) +
+  labs(title = 'Category Accuracy by Model',
+       subtitle = 'Accuracy denoted as a percent label',
+       y = 'Percent classified')
+```
+
+
+## Conclusion: What I learned
+
+Decision tree and random forest models were trained on the audio feature data for 588 grammy winning songs. The random forest model was able to classify ~61% of songs into the correct category, a marked improvement from random chance (1 in 6 or ~17%), while the individual decision tree shed light on which audio features were most relevant for classifying each category.
+
+Rock and Alternative was one of the easier categories to classify, due to the speechiness of the songs. Electronic/Dance had a higher danceablity then most.
